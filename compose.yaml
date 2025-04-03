@@ -1,0 +1,15 @@
+services:
+  surrealdb:
+    entrypoint:
+      - /surreal
+      - start
+      - --user
+      - $SURREALDB_USERNAME
+      - --pass
+      - $SURREALDB_PASSWORD
+      - --bind
+      - $SURREALDB_BIND
+    image: surrealdb/surrealdb:latest
+    ports:
+      - 8000:8000
+

@@ -1,0 +1,21 @@
+[package]
+name = "goldendate_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.8.3"
+hyper = { version = "1.6.0", features = ["full"] }
+tokio = { version = "1.32.0", features = ["full"] }
+tower = "0.5.2"
+siwe = "0.6.1"
+prefix-hex = "0.7.1"
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.105"
+thiserror = "2.0.12"
+surrealdb = "2.0.4"
+clap = { version = "4.5.35", features = ["derive", "env"] }
+serde_with = "3.3.0"
+anyhow = "1.0.97"
+jsonwebtoken = "9.3.1"
+axum-extra = { version = "0.10.1", features = ["typed-header"] }
