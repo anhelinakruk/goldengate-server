@@ -8,6 +8,7 @@ use axum_extra::{headers, TypedHeader};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use surrealdb::sql::Thing;
 
 use crate::AppState;
 
@@ -16,6 +17,12 @@ use super::verify_jwt;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenerateNonceResponse {
     pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetNonceResult {
+    pub id: Thing,
+    pub value: String,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

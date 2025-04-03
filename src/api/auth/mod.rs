@@ -6,7 +6,8 @@ use hyper::HeaderMap;
 use jsonwebtoken::TokenData;
 use jsonwebtoken::{decode, encode, Header, Validation};
 use models::{
-    AuthBody, AuthError, Claims, GenerateNonceResponse, Keys, VerifySiweAndCreateUserRequest,
+    AuthBody, AuthError, Claims, GenerateNonceResponse, GetNonceResult, Keys,
+    VerifySiweAndCreateUserRequest,
 };
 use siwe::{generate_nonce, Message};
 use std::str::FromStr;
@@ -63,6 +64,22 @@ pub async fn verify_siwe_and_create_user(
     let signature: [u8; 65] =
         prefix_hex::decode(&payload.signature).expect("Failed to decode signature");
 
+    let nonce_exists = state
+        .database
+        .query(
+            "
+            DELETE nonce WHERE exp < time::now() RETURN BEFORE;
+            SELECT id, value FROM nonce WHERE value == type::string($value);
+        ",
+        )
+        .bind(("value", siwe_message.nonce.clone()))
+        .await?
+        .take::<Option<GetNonceResult>>(1)?
+        .is_some();
+
+    if !nonce_exists {
+        return Err(AppError(anyhow::anyhow!("Invalid nonce")));
+    }
     siwe_message
         .verify(&signature, &siwe::VerificationOpts::default())
         .await?;
@@ -103,7 +120,7 @@ pub async fn create_user(
     println!("User address: {}", address);
 
     let user_id = match db
-        .query("SELECT id FROM user WHERE address = type::string($address)")
+        .query("SELECT VALUE id FROM user WHERE address = type::string($address)")
         .bind(("address", address.clone()))
         .await?
         .take::<Option<Thing>>(0)?
