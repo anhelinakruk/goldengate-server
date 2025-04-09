@@ -59,8 +59,9 @@ pub async fn verify_siwe_and_create_user(
 ) -> Result<(HeaderMap, Json<AuthBody>), AppError> {
     println!("payload: {}", payload.message);
 
-    let siwe_message = Message::from_str(&payload.message)?;
+    let siwe_message = Message::from_str(&payload.message).unwrap();
 
+    println!("payload: {}", siwe_message);
     let signature: [u8; 65] =
         prefix_hex::decode(&payload.signature).expect("Failed to decode signature");
 
@@ -80,13 +81,19 @@ pub async fn verify_siwe_and_create_user(
     if !nonce_exists {
         return Err(AppError(anyhow::anyhow!("Invalid nonce")));
     }
+
     siwe_message
         .verify(&signature, &siwe::VerificationOpts::default())
-        .await?;
+        .await
+        .unwrap();
 
     println!("SIWE message verified");
 
-    let user_id = create_user(State(state.clone()), payload.address.clone()).await?;
+    let user_id = create_user(
+        State(state.clone()),
+        &payload.address.clone().to_lowercase(),
+    )
+    .await?;
 
     println!("User created");
 
@@ -113,14 +120,16 @@ pub async fn verify_siwe_and_create_user(
 // USER
 pub async fn create_user(
     State(state): State<AppState>,
-    address: String,
+    address: &String,
 ) -> Result<String, AppError> {
     let db = state.database.clone();
 
     println!("User address: {}", address);
 
     let user_id = match db
-        .query("SELECT VALUE id FROM user WHERE address = type::string($address)")
+        .query(
+            "SELECT VALUE id FROM user WHERE address = type::string(string::lowercase($address))",
+        )
         .bind(("address", address.clone()))
         .await?
         .take::<Option<Thing>>(0)?
@@ -132,7 +141,7 @@ pub async fn create_user(
         None => {
             println!("User not found, creating user");
             let user_id = db
-                .query("CREATE ONLY user SET address = type::string($address) RETURN VALUE id")
+                .query("CREATE ONLY user SET address = type::string(string::lowercase($address)), balance = type::number(0) RETURN VALUE id")
                 .bind(("address", address.clone()))
                 .await?
                 .take::<Option<Thing>>(0)?

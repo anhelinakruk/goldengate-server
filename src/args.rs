@@ -19,4 +19,10 @@ pub struct Args {
 
     #[arg(long, env, default_value = "secret")]
     pub jwt_secret: String,
+
+    #[arg(long, env)]
+    pub alchemy_rpc_url: String,
+
+    #[arg(long, env, default_value = "6")]
+    pub confirming_blocks: u64,
 }

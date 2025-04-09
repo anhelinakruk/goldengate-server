@@ -13,6 +13,8 @@ mod args;
 pub struct AppState {
     pub database: Surreal<Client>,
     pub jwt_secret: String,
+    pub alchemy_rpc_url: String,
+    pub confirming_blocks: u64,
 }
 
 impl AppState {
@@ -23,6 +25,8 @@ impl AppState {
         namespace: &str,
         database: &str,
         jwt_secret: &str,
+        alchemy_rpc_url: &str,
+        confirming_blocks: u64,
     ) -> Result<Self, Error> {
         let client = Surreal::new::<Ws>(address).await?;
         client.signin(Root { username, password }).await?;
@@ -31,6 +35,8 @@ impl AppState {
         Ok(AppState {
             database: client,
             jwt_secret: jwt_secret.to_string(),
+            alchemy_rpc_url: alchemy_rpc_url.to_string(),
+            confirming_blocks,
         })
     }
 }
@@ -55,6 +61,8 @@ async fn main() -> Result<(), ServerError> {
         &args.surrealdb_namespace,
         &args.surrealdb_database,
         &args.jwt_secret,
+        &args.alchemy_rpc_url,
+        args.confirming_blocks,
     )
     .await?;
 
