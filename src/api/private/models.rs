@@ -70,3 +70,9 @@ pub struct ConfirmDepositResponse {
     pub id: Thing,
     pub balance: i128,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WithdrawRequest {
+    pub amount: i128,
+    pub address: String,
+}

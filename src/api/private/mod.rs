@@ -1,15 +1,18 @@
 use crate::api::private::models::ConfirmDepositResponse;
 use crate::AppState;
+use alloy::primitives::U256;
 use alloy::providers::Provider;
-use alloy::{primitives::FixedBytes, providers::ProviderBuilder};
+use alloy::{primitives::FixedBytes, providers::ProviderBuilder, sol};
 use axum::{
     extract::State,
     routing::{get, post},
     Json, Router,
 };
+use std::ops::Div;
+
 use models::{
     ConfirmDepositRequest, CreateOfferRequest, CreateTransactionRequest, GetAggregatedFeeRequest,
-    GetAggregatedFeeResponse,
+    GetAggregatedFeeResponse, WithdrawRequest,
 };
 use std::{str::FromStr, time::Duration};
 
@@ -23,6 +26,7 @@ pub fn router(app_state: &AppState) -> Router {
         .route("/offers", post(create_offer))
         .route("/transactions", post(create_transaction))
         .route("/deposit", post(confirm_deposit))
+        .route("/withdraw", post(withdraw))
         .route("/fee", post(get_aggregated_fee))
         .with_state(app_state.clone())
 }
@@ -110,7 +114,7 @@ pub async fn create_transaction(
 
 pub async fn get_aggregated_fee(
     State(state): State<AppState>,
-    claims: Claims,
+    _claims: Claims,
     Json(payload): Json<GetAggregatedFeeRequest>,
 ) -> Result<Json<GetAggregatedFeeResponse>, AppError> {
     println!("Getting aggregated fee");
@@ -136,9 +140,13 @@ pub async fn get_aggregated_fee(
     }
 }
 
+sol! {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
 pub async fn confirm_deposit(
     State(state): State<AppState>,
-    // claims: Claims,
+    _claims: Claims,
     Json(payload): Json<ConfirmDepositRequest>,
 ) -> Result<Json<ConfirmDepositResponse>, AppError> {
     println!("Confirming deposit");
@@ -163,38 +171,56 @@ pub async fn confirm_deposit(
             Ok(receipt) => {
                 if let Some(receipt) = receipt {
                     println!("Receipt found");
+                    println!("Receipt logs: {:?}", receipt.logs());
 
                     let block_number = receipt
                         .block_number
                         .ok_or_else(|| AppError::from(anyhow::anyhow!("No block number found")))?;
                     let current_block = provider.get_block_number().await?;
 
+                    let maybe_log = receipt.decoded_log::<Transfer>();
+
+                    let Some(increment_log) = maybe_log else {
+                        return Err(AppError::from(anyhow::anyhow!("Increment not emitted")));
+                    };
+
+                    let Transfer { from, to, value } = increment_log.data;
+                    println!("Incremented value: {from} -> {to} = {value}");
+
+                    let decrement_log = receipt.decoded_log::<Transfer>();
+
+                    let Some(decrement_log) = decrement_log else {
+                        return Err(AppError::from(anyhow::anyhow!("Decrement not emitted")));
+                    };
+
+                    let Transfer { from, to, value } = decrement_log.data;
+                    println!("Decremented value: {from} -> {to} = {value}");
                     println!("Confirming blocks: {}", confirming_blocks);
                     println!("Transaction Block: {}", block_number);
                     println!("Current Block: {}", current_block);
 
                     if current_block - block_number >= confirming_blocks {
                         println!("Block confirmed");
-                        println!("Receipt from: {:?}", receipt.from);
-                        println!("Receipt to: {:?}", payload.amount);
+                        println!("Receipt from: {:?}", from);
+                        println!("Amount: {:?}", value.div(U256::from(10u128.pow(12))));
 
                         let mut respone = state
                             .database
                             .query(
-                                "UPDATE user SET balance = balance + type::number($amount) WHERE address = type::string($address) RETURN id, balance;",
+                                "UPDATE ONLY user SET balance = balance + type::number($amount) WHERE address = type::string($address) RETURN id, balance;",
                             )
-                            .bind(("address", receipt.from.to_string().to_lowercase()))
-                            .bind(("amount", payload.amount))
+                            .bind(("address", from.to_string().to_lowercase()))
+                            .bind(("amount", value.div(U256::from(10u128.pow(12))).to_string()))
                             .await?;
 
                         println!("Response: {:?}", respone);
 
-                        let updated_balance: Vec<ConfirmDepositResponse> =
+                        let updated_balance: Option<ConfirmDepositResponse> =
                             respone.take(0).map_err(AppError::from)?;
 
                         println!("Updated balance: {:?}", updated_balance);
 
-                        return Ok(Json(updated_balance[0].clone()));
+                        return Ok(Json(updated_balance.expect("No updated balance")));
                     }
                 }
             }
@@ -209,4 +235,14 @@ pub async fn confirm_deposit(
     Err(AppError::from(anyhow::anyhow!(
         "Transaction confirmation failed"
     )))
+}
+
+pub async fn withdraw(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Json(payload): Json<WithdrawRequest>,
+) -> Result<Json<WithdrawResponse>, AppError> {
+    println!("Withdrawing");
+
+    println!("payload: {:?}", payload);
 }
