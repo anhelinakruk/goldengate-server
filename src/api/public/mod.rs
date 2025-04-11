@@ -46,7 +46,10 @@ pub async fn get_offers(State(state): State<AppState>) -> Result<Json<Vec<Offer>
     println!("Offers: {:?}", offers);
     let offers: Vec<Offer> = offers.take(2).map_err(AppError::from)?;
     println!("Offers: {:?}", offers);
-    Ok(Json(offers))
+
+    let offers_json = Json(offers);
+    println!("Offers JSON: {:?}", offers_json);
+    Ok(offers_json)
 }
 
 pub async fn get_deposit_address(

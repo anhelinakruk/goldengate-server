@@ -1,3 +1,4 @@
+use crate::api::public::models::Offer;
 use crate::AppState;
 use alloy::hex::FromHex;
 use alloy::network::TransactionBuilder;
@@ -7,11 +8,14 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::FixedBytes, providers::ProviderBuilder, sol};
+use axum::extract::Path;
+use axum::routing::delete;
 use axum::{
     extract::State,
     routing::{get, post},
     Json, Router,
 };
+use hyper::StatusCode;
 use std::ops::Div;
 
 use models::{
@@ -33,6 +37,8 @@ pub fn router(app_state: &AppState) -> Router {
         .route("/withdraw", post(withdraw))
         .route("/fee", post(get_aggregated_fee))
         .route("/balance", get(get_balance))
+        .route("/user/offers", get(get_user_offers))
+        .route("/user/offers/{id}", delete(delete_offer))
         .with_state(app_state.clone())
 }
 
@@ -382,7 +388,6 @@ pub async fn withdraw(
                             println!("Receipt from: {:?}", from);
                             println!("Amount: {:?}", value.div(U256::from(10u128.pow(12))));
 
-                            // Asynchronous balance update after confirmation
                             let _ = state
                                     .database
                                     .query(
@@ -419,18 +424,78 @@ pub async fn get_balance(
     println!("Getting balance");
     let mut balance = state
         .database
-        .query("SELECT VALUE balance FROM user WHERE id = type::thing($id)")
+        .query("
+            LET $balance = MATH::SUM(SELECT VALUE balance FROM user WHERE walletAddress = $walletAddress);
+
+            LET $open_offers = MATH::SUM(SELECT VALUE amount + fee FROM offers WHERE userId.walletAddress = $walletAddress AND status != 'closed');
+
+            LET $closed_offers = MATH::SUM(SELECT VALUE amount + takerFee + makerFee FROM transactions WHERE offerId.userId.walletAddress = $walletAddress AND status = 'successful' AND offerId.status = 'closed');
+
+            RETURN $balance - $open_offers - $closed_offers;
+        ")
         .bind(("id", claims.sub.clone()))
         .await?;
 
     println!("Response: {:?}", balance);
 
     let balance = balance
-        .take::<Option<i128>>(0)
+        .take::<Option<i128>>(3)
         .map_err(AppError::from)?
         .ok_or(AppError::from(anyhow::anyhow!("Balance not found")))?;
 
     println!("Balance: {:?}", balance);
 
     Ok(Json(GetBalanceResponse { balance }))
+}
+
+pub async fn get_user_offers(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<Vec<Offer>>, AppError> {
+    println!("Getting user offers");
+
+    let mut offers = state
+        .database
+        .query("
+            SELECT id , (amount - MATH::SUM(SELECT VALUE amount+takerFee
+            FROM transactions 
+            WHERE offerId = $parent.id AND status != type::string('rejected'))) as amount, 
+            cryptoType, currency, pricePerUnit, value, offerType, revTag, fee, status
+            FROM offers 
+            WHERE status != type::string('closed') AND userId = type::thing($userId) AND amount - MATH::SUM(SELECT VALUE amount+takerFee
+            FROM transactions 
+            WHERE offerId = $parent.id AND status != type::string('rejected')) > 0;
+        ")
+        .bind(("userId", claims.sub.clone()))
+        .await?;
+
+    println!("Response: {:?}", offers);
+
+    let offers = offers.take::<Vec<Offer>>(0).map_err(AppError::from)?;
+
+    println!("Offers: {:?}", offers);
+
+    Ok(Json(offers))
+}
+
+pub async fn delete_offer(
+    State(state): State<AppState>,
+    _claims: Claims,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    println!("Deleting offer with id: {}", id);
+
+    let _ = state
+        .database
+        .query("
+            IF COUNT(SELECT * FROM transactions WHERE status='pending' AND offerId = type::thing($id)) > 0 THEN {
+					UPDATE offers SET status = type::string('stopped') WHERE id = type::thing($id);
+			} ELSE {
+					UPDATE offers SET status = type::string('closed') WHERE id = type::thing($id);
+			} END;
+        ")
+        .bind(("id", id))
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
