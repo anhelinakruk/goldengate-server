@@ -15,6 +15,9 @@ pub struct AppState {
     pub jwt_secret: String,
     pub alchemy_rpc_url: String,
     pub confirming_blocks: u64,
+    pub private_key: String,
+    pub token_address: String,
+    pub wallet_address: String,
 }
 
 impl AppState {
@@ -27,6 +30,9 @@ impl AppState {
         jwt_secret: &str,
         alchemy_rpc_url: &str,
         confirming_blocks: u64,
+        private_key: &str,
+        token_address: &str,
+        wallet_address: &str,
     ) -> Result<Self, Error> {
         let client = Surreal::new::<Ws>(address).await?;
         client.signin(Root { username, password }).await?;
@@ -37,6 +43,9 @@ impl AppState {
             jwt_secret: jwt_secret.to_string(),
             alchemy_rpc_url: alchemy_rpc_url.to_string(),
             confirming_blocks,
+            private_key: private_key.to_string(),
+            token_address: token_address.to_string(),
+            wallet_address: wallet_address.to_string(),
         })
     }
 }
@@ -63,6 +72,9 @@ async fn main() -> Result<(), ServerError> {
         &args.jwt_secret,
         &args.alchemy_rpc_url,
         args.confirming_blocks,
+        &args.private_key,
+        &args.token_address,
+        &args.wallet_address,
     )
     .await?;
 

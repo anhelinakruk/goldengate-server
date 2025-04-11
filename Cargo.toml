@@ -19,5 +19,4 @@ serde_with = "3.3.0"
 anyhow = "1.0.97"
 jsonwebtoken = "9.3.1"
 axum-extra = { version = "0.10.1", features = ["typed-header"] }
-# ethers = { version = "2.0.14", features = ["celo"] }
-alloy = "0.13.0"
+alloy = { version = "0.14.0" }

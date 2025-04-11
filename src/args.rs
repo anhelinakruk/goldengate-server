@@ -25,4 +25,13 @@ pub struct Args {
 
     #[arg(long, env, default_value = "6")]
     pub confirming_blocks: u64,
+
+    #[arg(long, env)]
+    pub wallet_address: String,
+
+    #[arg(long, env)]
+    pub private_key: String,
+
+    #[arg(long, env)]
+    pub token_address: String,
 }

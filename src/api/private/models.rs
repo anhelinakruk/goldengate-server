@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use serde_with::DisplayFromStr;
-use surrealdb::sql::Thing;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateOfferRequest {
@@ -63,16 +62,13 @@ pub struct ConfirmDepositRequest {
     pub amount: i128,
 }
 
-#[serde_as]
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ConfirmDepositResponse {
-    #[serde_as(serialize_as = "DisplayFromStr")]
-    pub id: Thing,
-    pub balance: i128,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WithdrawRequest {
     pub amount: i128,
     pub address: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetBalanceResponse {
+    pub balance: i128,
 }

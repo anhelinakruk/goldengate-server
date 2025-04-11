@@ -1,7 +1,11 @@
-use crate::api::private::models::ConfirmDepositResponse;
 use crate::AppState;
-use alloy::primitives::U256;
+use alloy::hex::FromHex;
+use alloy::network::TransactionBuilder;
+use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
+use alloy::rpc::types::TransactionRequest;
+use alloy::signers::k256::ecdsa::SigningKey;
+use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::FixedBytes, providers::ProviderBuilder, sol};
 use axum::{
     extract::State,
@@ -12,7 +16,7 @@ use std::ops::Div;
 
 use models::{
     ConfirmDepositRequest, CreateOfferRequest, CreateTransactionRequest, GetAggregatedFeeRequest,
-    GetAggregatedFeeResponse, WithdrawRequest,
+    GetAggregatedFeeResponse, GetBalanceResponse, WithdrawRequest,
 };
 use std::{str::FromStr, time::Duration};
 
@@ -28,6 +32,7 @@ pub fn router(app_state: &AppState) -> Router {
         .route("/deposit", post(confirm_deposit))
         .route("/withdraw", post(withdraw))
         .route("/fee", post(get_aggregated_fee))
+        .route("/balance", get(get_balance))
         .with_state(app_state.clone())
 }
 
@@ -142,13 +147,17 @@ pub async fn get_aggregated_fee(
 
 sol! {
     event Transfer(address indexed from, address indexed to, uint256 value);
+
+    interface IERC20 {
+        function transfer(address to, uint256 amount) external returns (bool);
+    }
 }
 
 pub async fn confirm_deposit(
     State(state): State<AppState>,
     _claims: Claims,
     Json(payload): Json<ConfirmDepositRequest>,
-) -> Result<Json<ConfirmDepositResponse>, AppError> {
+) -> Result<(), AppError> {
     println!("Confirming deposit");
     println!("payload: {:?}", payload);
 
@@ -156,93 +165,272 @@ pub async fn confirm_deposit(
     let provider = ProviderBuilder::new().on_http(rpc_url);
 
     let confirming_blocks = state.confirming_blocks;
-
     let tx_hash = FixedBytes::from_str(&payload.tx_hash)?;
 
-    for retries in 0..15 {
-        println!("Retrying attempt {}", retries + 1);
-        println!("Tx hash: {:?}", tx_hash);
+    tokio::spawn(async move {
+        for retries in 0..15 {
+            println!("Retrying attempt {}", retries + 1);
+            println!("Tx hash: {:?}", tx_hash);
 
-        let receipt = provider.get_transaction_receipt(tx_hash).await;
+            let receipt = provider.get_transaction_receipt(tx_hash).await;
 
-        println!("Receipt: {:?}", receipt);
+            println!("Receipt: {:?}", receipt);
 
-        match receipt {
-            Ok(receipt) => {
-                if let Some(receipt) = receipt {
-                    println!("Receipt found");
-                    println!("Receipt logs: {:?}", receipt.logs());
+            match receipt {
+                Ok(receipt) => {
+                    if let Some(receipt) = receipt {
+                        println!("Receipt found");
+                        println!("Receipt logs: {:?}", receipt.logs());
 
-                    let block_number = receipt
-                        .block_number
-                        .ok_or_else(|| AppError::from(anyhow::anyhow!("No block number found")))?;
-                    let current_block = provider.get_block_number().await?;
+                        let block_number = receipt.block_number.ok_or_else(|| {
+                            AppError::from(anyhow::anyhow!("No block number found"))
+                        })?;
+                        let current_block = provider.get_block_number().await?;
 
-                    let maybe_log = receipt.decoded_log::<Transfer>();
+                        let maybe_log = receipt.decoded_log::<Transfer>();
 
-                    let Some(increment_log) = maybe_log else {
-                        return Err(AppError::from(anyhow::anyhow!("Increment not emitted")));
-                    };
+                        let Some(increment_log) = maybe_log else {
+                            return Err(AppError::from(anyhow::anyhow!("Increment not emitted")));
+                        };
 
-                    let Transfer { from, to, value } = increment_log.data;
-                    println!("Incremented value: {from} -> {to} = {value}");
+                        let Transfer { from, to, value } = increment_log.data;
+                        println!("Incremented value: {from} -> {to} = {value}");
 
-                    let decrement_log = receipt.decoded_log::<Transfer>();
+                        let decrement_log = receipt.decoded_log::<Transfer>();
 
-                    let Some(decrement_log) = decrement_log else {
-                        return Err(AppError::from(anyhow::anyhow!("Decrement not emitted")));
-                    };
+                        let Some(decrement_log) = decrement_log else {
+                            return Err(AppError::from(anyhow::anyhow!("Decrement not emitted")));
+                        };
 
-                    let Transfer { from, to, value } = decrement_log.data;
-                    println!("Decremented value: {from} -> {to} = {value}");
-                    println!("Confirming blocks: {}", confirming_blocks);
-                    println!("Transaction Block: {}", block_number);
-                    println!("Current Block: {}", current_block);
+                        let Transfer { from, to, value } = decrement_log.data;
+                        println!("Decremented value: {from} -> {to} = {value}");
+                        println!("Confirming blocks: {}", confirming_blocks);
+                        println!("Transaction Block: {}", block_number);
+                        println!("Current Block: {}", current_block);
 
-                    if current_block - block_number >= confirming_blocks {
-                        println!("Block confirmed");
-                        println!("Receipt from: {:?}", from);
-                        println!("Amount: {:?}", value.div(U256::from(10u128.pow(12))));
+                        if current_block - block_number >= confirming_blocks {
+                            println!("Block confirmed");
+                            println!("Receipt from: {:?}", from);
+                            println!("Amount: {:?}", value.div(U256::from(10u128.pow(12))));
 
-                        let mut respone = state
-                            .database
-                            .query(
-                                "UPDATE ONLY user SET balance = balance + type::number($amount) WHERE address = type::string($address) RETURN id, balance;",
-                            )
-                            .bind(("address", from.to_string().to_lowercase()))
-                            .bind(("amount", value.div(U256::from(10u128.pow(12))).to_string()))
-                            .await?;
+                            tokio::spawn(async move {
+                                let _ = state
+                                    .database
+                                    .query(
+                                        "UPDATE ONLY user SET balance = balance + type::number($amount) WHERE address = type::string($address) RETURN id, balance;",
+                                    )
+                                    .bind(("address", from.to_string().to_lowercase()))
+                                    .bind(("amount", value.div(U256::from(10u128.pow(12))).to_string()))
+                                    .await;
 
-                        println!("Response: {:?}", respone);
-
-                        let updated_balance: Option<ConfirmDepositResponse> =
-                            respone.take(0).map_err(AppError::from)?;
-
-                        println!("Updated balance: {:?}", updated_balance);
-
-                        return Ok(Json(updated_balance.expect("No updated balance")));
+                                println!("Balance updated for address: {}", from);
+                            });
+                            println!("Deposit confirmed!");
+                            return Ok(());
+                        }
                     }
                 }
+                Err(err) => {
+                    println!("Error getting transaction receipt: {}", err);
+                }
             }
-            Err(err) => {
-                println!("Error getting transaction receipt: {}", err);
-            }
+            tokio::time::sleep(Duration::from_secs(20)).await;
         }
 
-        tokio::time::sleep(Duration::from_secs(20)).await;
-    }
+        println!("Transaction confirmation failed");
+        Err(AppError::from(anyhow::anyhow!(
+            "Transaction confirmation failed after 15 attempts"
+        )))
+    });
 
-    Err(AppError::from(anyhow::anyhow!(
-        "Transaction confirmation failed"
-    )))
+    Ok(())
 }
 
 pub async fn withdraw(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
     Json(payload): Json<WithdrawRequest>,
-) -> Result<Json<WithdrawResponse>, AppError> {
+) -> Result<(), AppError> {
     println!("Withdrawing");
-
     println!("payload: {:?}", payload);
+
+    // Update the balance to prevent double spending
+    let mut user_balance = state
+        .database
+        .query("SELECT VALUE balance FROM user WHERE id = type::thing($id)")
+        .bind(("id", claims.sub.clone()))
+        .await?;
+
+    let user_balance = user_balance
+        .take::<Option<i128>>(0)
+        .map_err(AppError::from)?
+        .ok_or(AppError::from(anyhow::anyhow!("Balance not found")))?;
+
+    println!("User balance: {:?}", user_balance);
+
+    if user_balance < payload.amount {
+        return Err(AppError::from(anyhow::anyhow!("Insufficient balance")));
+    }
+
+    let mut update_balance = state
+        .database
+        .query(
+            "UPDATE ONLY user SET balance = balance - type::number($amount) WHERE id = type::thing($id) RETURN VALUE balance;",
+        )
+        .bind(("id", claims.sub.clone()))
+        .bind(("amount", payload.amount))
+        .await?;
+
+    println!("Update balance: {:?}", update_balance);
+
+    let updated_balance = update_balance
+        .take::<Option<i128>>(0)
+        .map_err(AppError::from)?
+        .ok_or(AppError::from(anyhow::anyhow!("Balance not found")))?;
+
+    println!("Updated balance: {:?}", updated_balance);
+
+    // Sign the transaction
+    let key_bytes: [u8; 32] = <[u8; 32]>::from_hex(&state.private_key)
+        .map_err(|_| AppError::from(anyhow::anyhow!("Invalid private key")))?;
+
+    let private_key = SigningKey::from_slice(&key_bytes).unwrap();
+    let signer = PrivateKeySigner::from_signing_key(private_key);
+
+    println!("Signer: {:?}", signer);
+
+    let provider = ProviderBuilder::new()
+        .wallet(signer)
+        .on_http(state.alchemy_rpc_url.parse()?);
+
+    println!("Provider: {:?}", provider);
+
+    let token_address = Address::from_str(&state.token_address)?;
+    let to_address = Address::from_str(&payload.address)?;
+    let amount = U256::from(payload.amount * 10i128.pow(12));
+    let call = IERC20::transferCall {
+        to: to_address,
+        amount,
+    };
+
+    println!("Token address: {:?}", token_address);
+    println!("To address: {:?}", to_address);
+    println!("Amount: {:?}", amount);
+
+    let tx = TransactionRequest::default()
+        .with_to(token_address)
+        .with_value(U256::from(0))
+        .with_call(&call);
+
+    let gas_estimate = provider.estimate_gas(tx.clone()).await?;
+
+    println!("Transaction: {:?}", tx);
+    println!("Gas estimate: {:?}", gas_estimate);
+
+    let tx_hash = provider
+        .send_transaction(tx.with_gas_limit(gas_estimate))
+        .await?
+        .watch()
+        .await?;
+
+    println!("Transaction sent: {:?}", tx_hash);
+
+    tokio::spawn(async move {
+        for retries in 0..15 {
+            println!("Retrying attempt {}", retries + 1);
+            println!("Tx hash: {:?}", tx_hash);
+
+            let receipt = provider.get_transaction_receipt(tx_hash).await;
+            let confirming_blocks = state.confirming_blocks;
+
+            println!("Receipt: {:?}", receipt);
+
+            match receipt {
+                Ok(receipt) => {
+                    if let Some(receipt) = receipt {
+                        println!("Receipt found");
+                        println!("Receipt logs: {:?}", receipt.logs());
+
+                        let block_number = receipt.block_number.ok_or_else(|| {
+                            AppError::from(anyhow::anyhow!("No block number found"))
+                        })?;
+                        let current_block = provider.get_block_number().await?;
+
+                        let maybe_log = receipt.decoded_log::<Transfer>();
+
+                        let Some(increment_log) = maybe_log else {
+                            return Err(AppError::from(anyhow::anyhow!("Increment not emitted")));
+                        };
+
+                        let Transfer { from, to, value } = increment_log.data;
+                        println!("Incremented value: {from} -> {to} = {value}");
+
+                        let decrement_log = receipt.decoded_log::<Transfer>();
+
+                        let Some(decrement_log) = decrement_log else {
+                            return Err(AppError::from(anyhow::anyhow!("Decrement not emitted")));
+                        };
+
+                        let Transfer { from, to, value } = decrement_log.data;
+                        println!("Decremented value: {from} -> {to} = {value}");
+                        println!("Confirming blocks: {}", confirming_blocks);
+                        println!("Transaction Block: {}", block_number);
+                        println!("Current Block: {}", current_block);
+
+                        if current_block - block_number >= confirming_blocks {
+                            println!("Block confirmed");
+                            println!("Receipt from: {:?}", from);
+                            println!("Amount: {:?}", value.div(U256::from(10u128.pow(12))));
+
+                            // Asynchronous balance update after confirmation
+                            let _ = state
+                                    .database
+                                    .query(
+                                        "UPDATE ONLY user SET balance = balance + type::number($amount) WHERE id = type::thing($id) RETURN balance;",
+                                    )
+                                    .bind(("id", from.to_string().to_lowercase()))
+                                    .bind(("amount", value.div(U256::from(10u128.pow(12))).to_string()))
+                                    .await;
+
+                            println!("Balance updated for address: {}", from);
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(err) => {
+                    println!("Error getting transaction receipt: {}", err);
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(20)).await;
+        }
+        Err(AppError::from(anyhow::anyhow!(
+            "Transaction confirmation failed after 15 attempts"
+        )))
+    });
+
+    Ok(())
+}
+
+pub async fn get_balance(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> Result<Json<GetBalanceResponse>, AppError> {
+    println!("Getting balance");
+    let mut balance = state
+        .database
+        .query("SELECT VALUE balance FROM user WHERE id = type::thing($id)")
+        .bind(("id", claims.sub.clone()))
+        .await?;
+
+    println!("Response: {:?}", balance);
+
+    let balance = balance
+        .take::<Option<i128>>(0)
+        .map_err(AppError::from)?
+        .ok_or(AppError::from(anyhow::anyhow!("Balance not found")))?;
+
+    println!("Balance: {:?}", balance);
+
+    Ok(Json(GetBalanceResponse { balance }))
 }

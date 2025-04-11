@@ -22,3 +22,8 @@ pub struct Offer {
     #[serde(rename = "revTag")]
     pub rev_tag: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DepositAddressResponse {
+    pub address: String,
+}

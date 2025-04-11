@@ -1,5 +1,5 @@
 use axum::{extract::State, routing::get, Json, Router};
-use models::Offer;
+use models::{DepositAddressResponse, Offer};
 
 use crate::AppState;
 
@@ -11,6 +11,7 @@ pub fn router(app_state: &AppState) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/offers", get(get_offers))
+        .route("/address", get(get_deposit_address))
         .with_state(app_state.clone())
 }
 
@@ -46,4 +47,14 @@ pub async fn get_offers(State(state): State<AppState>) -> Result<Json<Vec<Offer>
     let offers: Vec<Offer> = offers.take(2).map_err(AppError::from)?;
     println!("Offers: {:?}", offers);
     Ok(Json(offers))
+}
+
+pub async fn get_deposit_address(
+    State(state): State<AppState>,
+) -> Result<Json<DepositAddressResponse>, AppError> {
+    println!("Getting deposit address");
+    let deposit_address = state.wallet_address.clone();
+    Ok(Json(DepositAddressResponse {
+        address: deposit_address,
+    }))
 }
